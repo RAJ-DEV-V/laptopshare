@@ -1,9 +1,9 @@
 # Engineering Guardian (CCG / CCEG) Assurance Report
 
-**Generated:** 2026-11-18T17:39:06.429Z  
-**Execution Mode:** `full`  
-**Files Inspected:** 76  
-**Execution Time:** 53ms  
+**Generated:** 2026-11-03T13:14:53.591Z  
+**Execution Mode:** `diff`  
+**Files Inspected:** 1  
+**Execution Time:** 213ms  
 **Final Verdict:** **✅ [APPROVED]**  
 
 ---

@@ -19,6 +19,7 @@ from core.web_explorer_server import WebExplorerServer
 from ui.styles import DARK_THEME, LIGHT_THEME
 from ui.send_tab import SendTab
 from ui.receive_tab import ReceiveTab
+from ui.usb_link_tab import USBLinkTab
 from ui.browse_tab import BrowseTab
 from ui.migration_tab import MigrationTab
 from ui.devices_tab import DevicesTab
@@ -107,14 +108,16 @@ class MainWindow(QMainWindow):
 
         self.btn_send = self._create_nav_button("📤  Send Files", 0)
         self.btn_receive = self._create_nav_button("📥  Receive Files", 1)
-        self.btn_browse = self._create_nav_button("📂  Browse & Copy", 2)
-        self.btn_migrate = self._create_nav_button("🔄  PC Migration", 3)
-        self.btn_devices = self._create_nav_button("📡  Nearby Devices", 4)
-        self.btn_history = self._create_nav_button("📜  Transfer History", 5)
-        self.btn_settings = self._create_nav_button("⚙️  Settings", 6)
+        self.btn_usb = self._create_nav_button("🔌  USB-C Direct Link", 2)
+        self.btn_browse = self._create_nav_button("📂  Browse & Copy", 3)
+        self.btn_migrate = self._create_nav_button("🔄  PC Migration", 4)
+        self.btn_devices = self._create_nav_button("📡  Nearby Devices", 5)
+        self.btn_history = self._create_nav_button("📜  Transfer History", 6)
+        self.btn_settings = self._create_nav_button("⚙️  Settings", 7)
 
         sb_layout.addWidget(self.btn_send)
         sb_layout.addWidget(self.btn_receive)
+        sb_layout.addWidget(self.btn_usb)
         sb_layout.addWidget(self.btn_browse)
         sb_layout.addWidget(self.btn_migrate)
         sb_layout.addWidget(self.btn_devices)
@@ -135,6 +138,7 @@ class MainWindow(QMainWindow):
 
         self.send_tab = SendTab(self)
         self.receive_tab = ReceiveTab(self.server, self)
+        self.usb_tab = USBLinkTab(self)
         self.browse_tab = BrowseTab(self)
         self.migration_tab = MigrationTab(self)
         self.devices_tab = DevicesTab(self.discovery, self)
@@ -149,6 +153,7 @@ class MainWindow(QMainWindow):
 
         self.stack.addWidget(self.send_tab)
         self.stack.addWidget(self.receive_tab)
+        self.stack.addWidget(self.usb_tab)
         self.stack.addWidget(self.browse_tab)
         self.stack.addWidget(self.migration_tab)
         self.stack.addWidget(self.devices_tab)
@@ -191,7 +196,7 @@ class MainWindow(QMainWindow):
 
     def _on_nav_clicked(self, index: int):
         self.stack.setCurrentIndex(index)
-        if index == 5:
+        if index == 6:
             self.history_tab.refresh_records()
 
     def _switch_to_send_with_peer(self, peer: PeerDevice):
@@ -207,7 +212,7 @@ class MainWindow(QMainWindow):
                 self.browse_tab.peer_combo.setCurrentIndex(i)
                 break
         self.btn_browse.setChecked(True)
-        self.stack.setCurrentIndex(2)
+        self.stack.setCurrentIndex(3)
 
     def _switch_to_migrate_with_peer(self, peer: PeerDevice):
         self.migration_tab.target_mode_combo.setCurrentIndex(0)
@@ -217,7 +222,7 @@ class MainWindow(QMainWindow):
                 self.migration_tab.peer_combo.setCurrentIndex(i)
                 break
         self.btn_migrate.setChecked(True)
-        self.stack.setCurrentIndex(3)
+        self.stack.setCurrentIndex(4)
 
     def _on_peers_updated_main_thread(self, peers: List[PeerDevice]):
         self.send_tab.update_peers(peers)
@@ -245,4 +250,8 @@ class MainWindow(QMainWindow):
         self.discovery.stop()
         self.server.stop()
         self.web_explorer.stop()
+        try:
+            self.usb_tab.close()
+        except Exception:
+            pass
         super().closeEvent(event)

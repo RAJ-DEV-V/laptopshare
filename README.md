@@ -54,7 +54,47 @@ LaptopShare is built as a portable standalone Windows executable (`dist/LaptopSh
 
 ---
 
-## 🔍 Mode 2: Browse & Choose What to Copy (Remote Access with Permission)
+## 🔌 Mode 2: USB-C to USB-C Direct Laptop File Sharing (Virtual Drive U:\)
+
+Connect two Windows laptops directly using a compatible USB-C, USB4, or Thunderbolt cable to share files at maximum bus speeds directly inside **Windows File Explorer**:
+
+### 1. How It Works
+1. Connect both laptops with a compatible USB-C cable (Thunderbolt 3/4, USB4, or USB-C Host-to-Host Data Transfer Bridge Cable).
+2. LaptopShare detects the direct physical connection and link-local address (`169.254.x.x`).
+3. Both laptops automatically authenticate the direct session.
+4. The remote laptop is immediately mounted into Windows File Explorer under **This PC**:
+   ```
+   This PC
+     ├── Local Disk (C:)
+     ├── Data (D:)
+     └── USB-C Connected Laptop (U:)
+           ├── Desktop
+           ├── Documents
+           ├── Downloads
+           ├── Pictures
+           ├── Videos
+           └── Selected Drives
+   ```
+5. **Native File Explorer Operations:**
+   - Double-click `U:\` in Windows File Explorer.
+   - Drag and drop files and folders between laptops.
+   - Stream video files and preview photos directly without pre-downloading.
+   - Native Windows file copy progress dialog.
+
+### 2. Supported Cable & Hardware Modes
+- ⚡ **Thunderbolt 4 / USB4 Cable (20 - 40 Gbps):** Plug-and-play host-to-host networking. Windows generates a direct virtual network adapter at up to 40 Gbps.
+- 🔗 **USB-C Host-to-Host Transfer Bridge Cable (5 - 10 Gbps):** Includes an active bridge controller (Plugable, Belkin, Prolific PL27A1) for connecting standard USB 3.x host-only ports.
+- 🌐 **USB-C to Gigabit/2.5G Ethernet Crossover (1 - 2.5 Gbps):** Direct point-to-point wire link.
+- 📡 **Direct High-Speed P2P Fallback (480 - 1200 Mbps):** If an ordinary non-data phone charging cable is used, LaptopShare detects this and activates the high-speed Direct P2P Wireless Link so you can still share files without an external router.
+
+### 3. Security & Access Control
+- **Selective Folder Sharing:** Entire filesystem is never exposed by default. Checkboxes let you choose exactly which folders (`Desktop`, `Documents`, `Pictures`, `Videos`, etc.) to share over the cable.
+- **Mutual Authentication:** Connections require explicit screen approval or paired PIN.
+- **1-Click Disconnect:** Click **⏏️ Unmount Drive** in LaptopShare to cleanly detach the virtual drive.
+
+---
+
+## 🔍 Mode 3: Browse & Choose What to Copy (Remote Access with Permission)
 
 Instead of manually picking files on your old laptop, you can sit at your **new Lenovo LOQ**, request permission to browse your old laptop, and choose exactly what files or folders to copy!
 
