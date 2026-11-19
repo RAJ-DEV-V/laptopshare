@@ -16,7 +16,7 @@ HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 CHUNK_HEADER_FORMAT = ">IQI"  # FileID (4B), ChunkOffset (8B), ChunkLength (4B) = 16 bytes
 CHUNK_HEADER_SIZE = struct.calcsize(CHUNK_HEADER_FORMAT)
 
-DEFAULT_CHUNK_SIZE = 1024 * 1024  # 1 MB high-throughput chunks for videos & large files
+DEFAULT_CHUNK_SIZE = 2 * 1024 * 1024  # 2 MB high-throughput chunks for videos, photos & Wi-Fi 6
 
 class MsgType(IntEnum):
     HANDSHAKE_REQ = 0x01

@@ -133,10 +133,10 @@ class TransferServer:
         dest_dir = ConfigManager().get().download_dir
 
         try:
-            # Tune socket buffers for high-speed local network transfer
+            # Tune socket buffers for high-speed local network transfer (4MB window)
             try:
-                raw_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2 * 1024 * 1024)
-                raw_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 2 * 1024 * 1024)
+                raw_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+                raw_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
                 raw_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             except Exception:
                 pass
@@ -285,7 +285,7 @@ class TransferServer:
 
                     start_offset = start_meta.get("offset", 0)
                     mode = "r+b" if (start_offset > 0 and file_out_path.exists()) else "wb"
-                    active_file_handle = open(file_out_path, mode)
+                    active_file_handle = open(file_out_path, mode, buffering=2 * 1024 * 1024)
                     if start_offset > 0:
                         active_file_handle.seek(start_offset)
                     current_file_received_bytes = start_offset

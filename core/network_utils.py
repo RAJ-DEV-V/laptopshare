@@ -6,7 +6,9 @@ and provides network diagnostics and firewall assistance.
 
 import socket
 import subprocess
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
+
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
 def get_local_ip_addresses() -> List[Dict[str, str]]:
     """
@@ -152,3 +154,74 @@ New-NetFirewallRule -DisplayName "LaptopShare File Transfer" -Direction Inbound 
 #### Network Profile Note:
 Ensure your Wi-Fi network profile on both laptops is set to **Private Network** (Settings > Network & internet > Wi-Fi > [Your Wi-Fi network] > Network profile type = Private). Windows blocks LAN traffic when set to Public!
 """
+
+def get_wifi_diagnostics() -> Dict[str, Any]:
+    """
+    Audits the current Wi-Fi adapter state using 'netsh wlan show interfaces' silently.
+    Returns details on SSID, band, radio type (802.11ax), speeds, and performance advice.
+    """
+    info = {
+        "connected": False,
+        "name": "",
+        "ssid": "",
+        "band": "",
+        "radio": "",
+        "link_speed_tx": "0",
+        "link_speed_rx": "0",
+        "signal": "",
+        "is_5ghz": False,
+        "is_wifi6": False,
+        "advice": ""
+    }
+    try:
+        res = subprocess.run(
+            ["netsh", "wlan", "show", "interfaces"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            creationflags=CREATE_NO_WINDOW
+        )
+        if res.returncode == 0:
+            parsed = {}
+            for line in res.stdout.splitlines():
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    parsed[k.strip().lower()] = v.strip()
+
+            state = parsed.get("state", "").lower()
+            if state == "connected":
+                info["connected"] = True
+                info["name"] = parsed.get("name", "Wi-Fi")
+                info["ssid"] = parsed.get("ssid", "")
+                info["band"] = parsed.get("band", "")
+                info["radio"] = parsed.get("radio type", "")
+                info["link_speed_tx"] = parsed.get("transmit rate (mbps)", "0")
+                info["link_speed_rx"] = parsed.get("receive rate (mbps)", "0")
+                info["signal"] = parsed.get("signal", "")
+                info["is_5ghz"] = "5" in info["band"] or "6" in info["band"]
+                info["is_wifi6"] = "802.11ax" in info["radio"].lower() or "wi-fi 6" in info["radio"].lower()
+
+                # Generate actionable optimization advice
+                tx_spd = 0
+                try:
+                    tx_spd = int(info["link_speed_tx"])
+                except Exception:
+                    pass
+
+                if not info["is_5ghz"]:
+                    info["advice"] = "⚠️ Connected on slow 2.4 GHz band. Switch to 5 GHz or enable Windows 5GHz Direct Hotspot for 5x–10x faster speeds!"
+                elif tx_spd < 600:
+                    info["advice"] = f"💡 2-Hop Relay / Moderate link ({tx_spd} Mbps via '{info['ssid']}'). For maximum wireless speed (100+ MB/s), host a Windows 5GHz Direct Hotspot on this PC!"
+                else:
+                    info["advice"] = f"⚡ Ultra-Fast Wi-Fi Active: {info['radio']} on {info['band']} ({tx_spd} Mbps link rate)."
+    except Exception as e:
+        info["advice"] = f"Wi-Fi diagnostic unavailable ({e})."
+    return info
+
+def open_mobile_hotspot_settings():
+    """Opens Windows 11/10 Mobile Hotspot Settings directly."""
+    try:
+        import os
+        os.startfile("ms-settings:network-mobilehotspot")
+    except Exception:
+        pass

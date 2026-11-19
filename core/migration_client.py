@@ -48,6 +48,9 @@ class MigrationClient:
         raw_sock = None
         try:
             raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            raw_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+            raw_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
+            raw_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             raw_sock.settimeout(15.0)
             raw_sock.connect((self.target_ip, self.target_port))
 

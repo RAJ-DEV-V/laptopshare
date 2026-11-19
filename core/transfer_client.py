@@ -81,10 +81,10 @@ class TransferClient:
         tls_sock = None
 
         try:
-            # Create TCP connection with optimized high-performance LAN buffers
+            # Create TCP connection with optimized high-performance LAN buffers (4MB window)
             raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            raw_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2 * 1024 * 1024)
-            raw_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 2 * 1024 * 1024)
+            raw_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+            raw_sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
             raw_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             raw_sock.settimeout(15.0)
             raw_sock.connect((self.target_ip, self.target_port))
@@ -206,7 +206,7 @@ class TransferClient:
 
                 if start_offset < file_size:
                     try:
-                        with open(abs_path, "rb") as f:
+                        with open(abs_path, "rb", buffering=2 * 1024 * 1024) as f:
                             if start_offset > 0:
                                 f.seek(start_offset)
 

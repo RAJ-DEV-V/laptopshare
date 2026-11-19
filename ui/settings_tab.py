@@ -18,7 +18,9 @@ from core.network_utils import (
     get_local_ip_addresses,
     is_port_available,
     test_lan_connection,
-    get_firewall_troubleshooting_info
+    get_firewall_troubleshooting_info,
+    get_wifi_diagnostics,
+    open_mobile_hotspot_settings
 )
 
 class SettingsTab(QWidget):
@@ -113,6 +115,45 @@ class SettingsTab(QWidget):
 
         layout.addWidget(gen_card)
 
+        # Turbo Wi-Fi & Wireless Speed Accelerator Card
+        wifi_card = QFrame(content)
+        wifi_card.setObjectName("card")
+        wifi_card.setStyleSheet("QFrame#card { border: 1px solid #10b981; }")
+        wifi_layout = QVBoxLayout(wifi_card)
+        wifi_layout.setContentsMargins(16, 16, 16, 16)
+        wifi_layout.setSpacing(10)
+
+        wifi_title = QLabel("⚡ Turbo Wi-Fi 6 & Wireless Speed Accelerator", wifi_card)
+        wifi_title.setObjectName("sectionHeader")
+        wifi_sub = QLabel(
+            "Maximizes wireless transfer speeds by auditing radio bands, link negotiation rates, and bypassing 2-hop router relays.",
+            wifi_card
+        )
+        wifi_sub.setObjectName("subtitleLabel")
+        wifi_layout.addWidget(wifi_title)
+        wifi_layout.addWidget(wifi_sub)
+
+        self.wifi_audit_label = QLabel(wifi_card)
+        self.wifi_audit_label.setTextFormat(Qt.RichText)
+        self.wifi_audit_label.setWordWrap(True)
+        wifi_layout.addWidget(self.wifi_audit_label)
+
+        wifi_btn_row = QHBoxLayout()
+        refresh_wifi_btn = QPushButton("🔄 Re-Audit Wi-Fi", wifi_card)
+        refresh_wifi_btn.clicked.connect(self._refresh_wifi_audit)
+
+        hotspot_btn = QPushButton("🚀 Open Windows 5GHz Hotspot (Direct Link)", wifi_card)
+        hotspot_btn.setStyleSheet("background-color: #059669; color: white; font-weight: bold; padding: 6px 14px;")
+        hotspot_btn.clicked.connect(open_mobile_hotspot_settings)
+
+        wifi_btn_row.addWidget(refresh_wifi_btn)
+        wifi_btn_row.addWidget(hotspot_btn)
+        wifi_btn_row.addStretch()
+        wifi_layout.addLayout(wifi_btn_row)
+
+        layout.addWidget(wifi_card)
+        self._refresh_wifi_audit()
+
         # Network Diagnostics Card
         diag_card = QFrame(content)
         diag_card.setObjectName("card")
@@ -178,6 +219,22 @@ class SettingsTab(QWidget):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(scroll)
+
+    def _refresh_wifi_audit(self):
+        info = get_wifi_diagnostics()
+        if info.get("connected"):
+            band_color = "#10b981" if info.get("is_5ghz") else "#f59e0b"
+            wifi6_badge = " [Wi-Fi 6 / 802.11ax]" if info.get("is_wifi6") else ""
+            html = f"""
+            <b>Current Wireless Connection:</b><br>
+            • <b>Network (SSID):</b> {info.get('ssid', 'Unknown')} {wifi6_badge}<br>
+            • <b>Band:</b> <span style="color: {band_color}; font-weight: bold;">{info.get('band', 'Unknown')}</span> | <b>Signal:</b> {info.get('signal', 'Unknown')}<br>
+            • <b>Negotiated Link Rate:</b> <b>{info.get('link_speed_tx', '0')} Mbps</b> (TX) / <b>{info.get('link_speed_rx', '0')} Mbps</b> (RX)<br>
+            • <b>Optimization Advice:</b> {info.get('advice', '')}
+            """
+        else:
+            html = "<i>No active Wi-Fi adapter detected or not currently connected to a wireless network.</i>"
+        self.wifi_audit_label.setText(html)
 
     def _refresh_detected_ips(self):
         ips = get_local_ip_addresses()
