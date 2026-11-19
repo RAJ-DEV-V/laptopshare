@@ -13,6 +13,8 @@ import winreg
 from pathlib import Path
 from typing import Tuple, Optional, List
 
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
 DEFAULT_DRIVE_LETTER = "U:"
 DEFAULT_DRIVE_LABEL = "USB-C Connected Laptop"
 
@@ -89,7 +91,7 @@ def mount_usb_laptop_drive(
 
     # Ensure Windows WebClient service is active
     try:
-        subprocess.run(["sc", "start", "webclient"], capture_output=True, timeout=2)
+        subprocess.run(["sc", "start", "webclient"], capture_output=True, timeout=2, creationflags=CREATE_NO_WINDOW)
     except Exception:
         pass
 
@@ -102,7 +104,7 @@ def mount_usb_laptop_drive(
 
     cmd1 = ["net", "use", target_letter, url_target, "/user:guest", '""', "/persistent:no"]
     try:
-        res1 = subprocess.run(cmd1, capture_output=True, text=True, timeout=8)
+        res1 = subprocess.run(cmd1, capture_output=True, text=True, timeout=8, creationflags=CREATE_NO_WINDOW)
         if res1.returncode == 0:
             set_windows_explorer_drive_label(url_target, target_letter, drive_label)
             if open_explorer:
@@ -114,7 +116,7 @@ def mount_usb_laptop_drive(
     # 2. Attempt UNC mount: net use <letter> \\ip@port\DavWWWRoot
     cmd2 = ["net", "use", target_letter, unc_target, "/user:guest", '""', "/persistent:no"]
     try:
-        res2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=8)
+        res2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=8, creationflags=CREATE_NO_WINDOW)
         if res2.returncode == 0:
             set_windows_explorer_drive_label(unc_target, target_letter, drive_label)
             if open_explorer:
@@ -136,7 +138,7 @@ def unmount_usb_laptop_drive(drive_letter: str) -> bool:
     if not clean_letter.endswith(":"):
         clean_letter += ":"
     try:
-        res = subprocess.run(["net", "use", clean_letter, "/delete", "/y"], capture_output=True, text=True, timeout=4)
+        res = subprocess.run(["net", "use", clean_letter, "/delete", "/y"], capture_output=True, text=True, timeout=4, creationflags=CREATE_NO_WINDOW)
         return res.returncode == 0
     except Exception:
         return False

@@ -20,6 +20,8 @@ from socketserver import ThreadingMixIn
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
 from .config import ConfigManager, get_system_shared_roots, DEFAULT_TRANSFER_PORT
 
 DEFAULT_WEB_EXPLORER_PORT = 52145
@@ -47,7 +49,7 @@ def mount_remote_in_windows_explorer(ip: str, port: int = DEFAULT_WEB_EXPLORER_P
 
     # 1. Ensure Windows WebClient service is started
     try:
-        subprocess.run(["sc", "start", "webclient"], capture_output=True, timeout=3)
+        subprocess.run(["sc", "start", "webclient"], capture_output=True, timeout=3, creationflags=CREATE_NO_WINDOW)
     except Exception:
         pass
 
@@ -56,7 +58,7 @@ def mount_remote_in_windows_explorer(ip: str, port: int = DEFAULT_WEB_EXPLORER_P
     cmd = ["net", "use", drive_letter, webdav_url, "/persistent:no"]
 
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=8, creationflags=CREATE_NO_WINDOW)
         if res.returncode == 0:
             # Successfully mounted drive
             subprocess.Popen(["explorer.exe", f"{drive_letter}\\"])
@@ -68,7 +70,7 @@ def mount_remote_in_windows_explorer(ip: str, port: int = DEFAULT_WEB_EXPLORER_P
     unc_path = f"\\\\{ip}@{port}\\DavWWWRoot"
     cmd2 = ["net", "use", drive_letter, unc_path, "/persistent:no"]
     try:
-        res2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=8)
+        res2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=8, creationflags=CREATE_NO_WINDOW)
         if res2.returncode == 0:
             subprocess.Popen(["explorer.exe", f"{drive_letter}\\"])
             return True, drive_letter, f"Mounted as {drive_letter} in Windows Explorer!"
@@ -91,7 +93,7 @@ def unmount_drive(drive_letter: str) -> bool:
     if not clean_letter.endswith(":"):
         clean_letter += ":"
     try:
-        res = subprocess.run(["net", "use", clean_letter, "/delete", "/y"], capture_output=True, text=True, timeout=5)
+        res = subprocess.run(["net", "use", clean_letter, "/delete", "/y"], capture_output=True, text=True, timeout=5, creationflags=CREATE_NO_WINDOW)
         return res.returncode == 0
     except Exception:
         return False
