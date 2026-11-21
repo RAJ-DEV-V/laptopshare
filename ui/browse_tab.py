@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QProgressBar, QFrame, QMessageBox, QFileDialog,
     QSplitter, QCheckBox, QApplication
 )
+import threading
 from PySide6.QtCore import Qt, Signal, QObject, Slot
 
 from core.config import ConfigManager
@@ -28,12 +29,19 @@ from core.web_explorer_server import (
     DEFAULT_WEB_EXPLORER_PORT,
     open_in_windows_explorer
 )
-from core.virtual_drive import mount_ethernet_laptop_drive, open_virtual_drive, DEFAULT_ETHERNET_DRIVE_LETTER
+from core.virtual_drive import (
+    mount_ethernet_laptop_drive,
+    open_virtual_drive,
+    DEFAULT_ETHERNET_DRIVE_LETTER,
+    enable_windows_webclient_permissions,
+    get_webclient_basic_auth_level
+)
 
 class PullSignalBridge(QObject):
     progress = Signal(int, str, int, int, int, int, float, float)
     file_done = Signal(str, bool)
     finished = Signal(bool, str)
+    mount_result = Signal(bool, str, str)
 
 def get_file_icon_and_type(name: str, is_dir: bool) -> tuple[str, str]:
     if is_dir:
@@ -71,6 +79,7 @@ class BrowseTab(QWidget):
         self.bridge.progress.connect(self._on_pull_progress)
         self.bridge.file_done.connect(self._on_pull_file_done)
         self.bridge.finished.connect(self._on_pull_finished)
+        self.bridge.mount_result.connect(self._on_mount_result)
 
         self._init_ui()
 
@@ -179,6 +188,11 @@ class BrowseTab(QWidget):
         self.open_dest_btn = QPushButton("📁 Downloads Folder", self)
         self.open_dest_btn.clicked.connect(self._open_destination_folder)
         exp_bar_layout.addWidget(self.open_dest_btn)
+
+        self.fix_perms_browse_btn = QPushButton("🔓 Fix Permissions", self)
+        self.fix_perms_browse_btn.setToolTip("Unlock Windows Explorer access policy (BasicAuthLevel=2)")
+        self.fix_perms_browse_btn.clicked.connect(self._on_fix_permissions_clicked)
+        exp_bar_layout.addWidget(self.fix_perms_browse_btn)
 
         main_layout.addWidget(exp_bar)
 
@@ -675,13 +689,25 @@ class BrowseTab(QWidget):
             QMessageBox.warning(self, "Target Missing", "Select or enter the remote laptop IP first.")
             return
 
-        ok, drive, msg = mount_ethernet_laptop_drive(
-            remote_ip=ip,
-            port=DEFAULT_WEB_EXPLORER_PORT,
-            preferred_letter=DEFAULT_ETHERNET_DRIVE_LETTER,
-            drive_label="Ethernet Connected Laptop",
-            open_explorer=True
-        )
+        self.mount_explorer_btn.setEnabled(False)
+        self.mount_explorer_btn.setText("⏳ Mounting Drive E:... (No Lag)")
+
+        def worker():
+            ok, drive, msg = mount_ethernet_laptop_drive(
+                remote_ip=ip,
+                port=DEFAULT_WEB_EXPLORER_PORT,
+                preferred_letter=DEFAULT_ETHERNET_DRIVE_LETTER,
+                drive_label="Ethernet Connected Laptop",
+                open_explorer=True
+            )
+            self.bridge.mount_result.emit(ok, drive, msg)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    @Slot(bool, str, str)
+    def _on_mount_result(self, ok: bool, drive: str, msg: str):
+        self.mount_explorer_btn.setEnabled(True)
+        self.mount_explorer_btn.setText("📂 Open in Windows File Explorer (Drive E:)")
         if ok:
             QMessageBox.information(
                 self,
@@ -690,7 +716,41 @@ class BrowseTab(QWidget):
                 f"You can now browse and transfer files using native Windows File Explorer!"
             )
         else:
-            QMessageBox.warning(self, "Explorer Mount Helper", f"Could not mount in Windows Explorer: {msg}\n\nMake sure LaptopShare is running on the other laptop.")
+            auth_level = get_webclient_basic_auth_level()
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle("Windows Explorer Mount Helper")
+
+            if "WINDOWS_PERMISSION_REQUIRED" in msg or auth_level < 2:
+                box.setText(
+                    "<b>Windows File Explorer Permission Restriction Detected</b><br><br>"
+                    "Windows blocks unencrypted network drive mapping by default (<code>BasicAuthLevel = 1</code>). "
+                    "This causes Explorer to report <i>'Access is denied'</i> or freeze.<br><br>"
+                    "Would you like to unlock Windows permissions, or continue using the built-in Remote File Explorer below?"
+                )
+                fix_btn = box.addButton("🔓 1-Click Fix Windows Permissions", QMessageBox.ActionRole)
+                box.addButton("Use Built-in Explorer (Active)", QMessageBox.AcceptRole)
+                box.addButton(QMessageBox.Cancel)
+
+                box.exec_()
+                if box.clickedButton() == fix_btn:
+                    self._on_fix_permissions_clicked()
+            else:
+                QMessageBox.warning(self, "Explorer Mount Helper", f"Could not mount in Windows Explorer: {msg}\n\nMake sure LaptopShare is running on the other laptop.")
+
+    def _on_fix_permissions_clicked(self):
+        ok, msg = enable_windows_webclient_permissions()
+        if ok:
+            QMessageBox.information(
+                self,
+                "Windows Permissions Update",
+                "A Windows User Account Control (UAC) prompt has been requested.<br><br>"
+                "1. Click <b>'Yes'</b> on the Windows UAC confirmation dialog.<br>"
+                "2. Windows will set <code>BasicAuthLevel = 2</code>, unlock 4GB file transfers, and restart WebClient.<br><br>"
+                "Once confirmed, click <b>'Open in Windows File Explorer'</b> again to mount Drive E:!"
+            )
+        else:
+            QMessageBox.warning(self, "Permission Update Failed", msg)
 
     def _open_target_web_browser(self):
         ip, port = self._get_target_ip_and_port()

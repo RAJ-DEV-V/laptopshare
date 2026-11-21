@@ -54,11 +54,21 @@ def get_system_shared_roots() -> List[Dict[str, str]]:
         if p.exists():
             roots.append({"name": f"📁 {name}", "path": str(p.resolve())})
 
-    # Available system drives (C:\, D:\, etc.)
-    for letter in string.ascii_uppercase:
-        drive_path = Path(f"{letter}:\\")
-        if drive_path.exists():
-            roots.append({"name": f"💾 Local Disk ({letter}:)", "path": str(drive_path)})
+    # Available local system drives (C:\, D:\, etc.) - safely avoiding slow/offline network shares
+    try:
+        import ctypes
+        bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+        for i, letter in enumerate(string.ascii_uppercase):
+            if bitmask & (1 << i):
+                # 2: DRIVE_REMOVABLE, 3: DRIVE_FIXED
+                dtype = ctypes.windll.kernel32.GetDriveTypeW(f"{letter}:\\")
+                if dtype in (2, 3):
+                    roots.append({"name": f"💾 Local Disk ({letter}:)", "path": f"{letter}:\\"})
+    except Exception:
+        for letter in ["C", "D"]:
+            drive_path = Path(f"{letter}:\\")
+            if drive_path.exists():
+                roots.append({"name": f"💾 Local Disk ({letter}:)", "path": str(drive_path)})
 
     return roots
 

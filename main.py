@@ -145,6 +145,10 @@ def main():
     except Exception:
         pass
 
+    # Clean up any stale/broken WebDAV network mappings from previous runs
+    from core.virtual_drive import cleanup_stale_laptopshare_drives
+    cleanup_stale_laptopshare_drives()
+
     # Launch PySide6 GUI
     from PySide6.QtWidgets import QApplication
     from PySide6.QtGui import QIcon

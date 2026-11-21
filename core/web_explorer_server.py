@@ -40,63 +40,22 @@ def get_free_drive_letter() -> Optional[str]:
 
 def mount_remote_in_windows_explorer(ip: str, port: int = DEFAULT_WEB_EXPLORER_PORT) -> Tuple[bool, str, str]:
     """
-    Mounts the remote LaptopShare WebDAV service as a Windows drive (e.g. Z:)
-    and opens it immediately in native Windows File Explorer.
+    Mounts the remote LaptopShare WebDAV service as a Windows drive (e.g. Z: or E:)
+    and opens it in native Windows File Explorer without GUI freeze or UNC hangs.
     """
-    drive_letter = get_free_drive_letter()
-    if not drive_letter:
-        drive_letter = "Z:"
-
-    # 1. Ensure Windows WebClient service is started
-    try:
-        subprocess.run(["sc", "start", "webclient"], capture_output=True, timeout=3, creationflags=CREATE_NO_WINDOW)
-    except Exception:
-        pass
-
-    # 2. Try mounting via 'net use'
-    webdav_url = f"http://{ip}:{port}/"
-    cmd = ["net", "use", drive_letter, webdav_url, "/persistent:no"]
-
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=8, creationflags=CREATE_NO_WINDOW)
-        if res.returncode == 0:
-            # Successfully mounted drive
-            subprocess.Popen(["explorer.exe", f"{drive_letter}\\"])
-            return True, drive_letter, f"Mounted as {drive_letter} in Windows Explorer!"
-    except Exception as e:
-        print(f"[WebDAV] net use attempt 1 error: {e}")
-
-    # Fallback attempt 2: UNC style \\ip@port\DavWWWRoot
-    unc_path = f"\\\\{ip}@{port}\\DavWWWRoot"
-    cmd2 = ["net", "use", drive_letter, unc_path, "/persistent:no"]
-    try:
-        res2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=8, creationflags=CREATE_NO_WINDOW)
-        if res2.returncode == 0:
-            subprocess.Popen(["explorer.exe", f"{drive_letter}\\"])
-            return True, drive_letter, f"Mounted as {drive_letter} in Windows Explorer!"
-    except Exception as e:
-        print(f"[WebDAV] net use attempt 2 error: {e}")
-
-    # Fallback attempt 3: Open UNC path directly in explorer.exe
-    try:
-        subprocess.Popen(["explorer.exe", unc_path])
-        return True, unc_path, f"Opened {unc_path} directly in Windows Explorer."
-    except Exception as e:
-        # Fallback attempt 4: Open web browser portal
-        import webbrowser
-        webbrowser.open(f"http://{ip}:{port}/")
-        return False, "", f"Could not map drive automatically ({e}). Opened Web Explorer in browser instead."
+    from .virtual_drive import mount_usb_laptop_drive
+    return mount_usb_laptop_drive(
+        remote_ip=ip,
+        port=port,
+        preferred_letter="Z:",
+        drive_label="Remote Laptop",
+        open_explorer=True
+    )
 
 def unmount_drive(drive_letter: str) -> bool:
     """Unmounts a mapped network drive."""
-    clean_letter = drive_letter.strip().rstrip("\\")
-    if not clean_letter.endswith(":"):
-        clean_letter += ":"
-    try:
-        res = subprocess.run(["net", "use", clean_letter, "/delete", "/y"], capture_output=True, text=True, timeout=5, creationflags=CREATE_NO_WINDOW)
-        return res.returncode == 0
-    except Exception:
-        return False
+    from .virtual_drive import unmount_usb_laptop_drive
+    return unmount_usb_laptop_drive(drive_letter)
 
 def open_in_windows_explorer(target_path: str):
     """Opens native Windows File Explorer focused on the specified path."""
@@ -188,12 +147,54 @@ class WebExplorerHandler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         """Responds to WebDAV capability inquiries from Windows Explorer."""
-        self.send_response(200)
+        self.send_response(200, "OK")
         self.send_header("DAV", "1, 2")
         self.send_header("MS-Author-Via", "DAV")
-        self.send_header("Allow", "OPTIONS, GET, HEAD, PROPFIND")
+        self.send_header("DASL", "<DAV:basicsearch>")
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Allow", "OPTIONS, GET, HEAD, PROPFIND, POST, PUT, DELETE, MOVE, COPY, LOCK, UNLOCK")
+        self.send_header("Public", "OPTIONS, GET, HEAD, PROPFIND, POST, PUT, DELETE, MOVE, COPY, LOCK, UNLOCK")
         self.send_header("Content-Length", "0")
         self.end_headers()
+
+    def do_LOCK(self):
+        """Responds to Windows Explorer file/folder lock requests."""
+        lock_token = "opaquelocktoken:12345678-1234-1234-1234-123456789abc"
+        body = f"""<?xml version="1.0" encoding="utf-8" ?>
+<D:prop xmlns:D="DAV:">
+  <D:lockdiscovery>
+    <D:activelock>
+      <D:locktype><D:write/></D:locktype>
+      <D:lockscope><D:exclusive/></D:lockscope>
+      <D:depth>Infinity</D:depth>
+      <D:owner><D:href>LaptopShare</D:href></D:owner>
+      <D:timeout>Second-3600</D:timeout>
+      <D:locktoken><D:href>{lock_token}</D:href></D:locktoken>
+    </D:activelock>
+  </D:lockdiscovery>
+</D:prop>""".encode("utf-8")
+        self.send_response(200, "OK")
+        self.send_header("Content-Type", 'application/xml; charset="utf-8"')
+        self.send_header("Lock-Token", f"<{lock_token}>")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_UNLOCK(self):
+        """Responds to Windows Explorer unlock requests."""
+        self.send_response(204, "No Content")
+        self.end_headers()
+
+    def do_PROPPATCH(self):
+        """Responds to Windows Explorer property patch requests."""
+        body = b"""<?xml version="1.0" encoding="utf-8" ?>
+<D:multistatus xmlns:D="DAV:">
+</D:multistatus>"""
+        self.send_response(207, "Multi-Status")
+        self.send_header("Content-Type", 'application/xml; charset="utf-8"')
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_PROPFIND(self):
         """Generates WebDAV XML multistatus for Windows Explorer."""

@@ -8,6 +8,7 @@ in-app Remote File Explorer launch, and shared folder access control.
 import os
 import time
 import socket
+import threading
 import webbrowser
 from pathlib import Path
 from typing import Optional, List
@@ -17,7 +18,7 @@ from PySide6.QtWidgets import (
     QFrame, QMessageBox, QCheckBox, QComboBox, QLineEdit,
     QProgressBar, QScrollArea, QGroupBox
 )
-from PySide6.QtCore import Qt, Signal, QObject
+from PySide6.QtCore import Qt, Signal, QObject, Slot, QMetaObject, Q_ARG
 
 from core.config import ConfigManager, DEFAULT_TRANSFER_PORT
 from core.usb_detector import USBDetectionService, HardwareAuditReport, DirectLinkAdapter
@@ -30,7 +31,9 @@ from core.virtual_drive import (
     DEFAULT_DRIVE_LETTER,
     DEFAULT_DRIVE_LABEL,
     DEFAULT_ETHERNET_DRIVE_LETTER,
-    DEFAULT_ETHERNET_DRIVE_LABEL
+    DEFAULT_ETHERNET_DRIVE_LABEL,
+    enable_windows_webclient_permissions,
+    get_webclient_basic_auth_level
 )
 from core.web_explorer_server import DEFAULT_WEB_EXPLORER_PORT
 from core.network_utils import get_ethernet_status, open_network_connections
@@ -39,6 +42,7 @@ class USBLinkBridge(QObject):
     cable_connected = Signal(object, str)
     cable_disconnected = Signal()
     status_updated = Signal(object)
+    mount_result = Signal(bool, str, str, bool)
 
 class USBLinkTab(QWidget):
     open_file_explorer_requested = Signal(str)  # emitted when user wants to browse peer in app explorer
@@ -53,6 +57,7 @@ class USBLinkTab(QWidget):
         self.bridge.cable_connected.connect(self._on_cable_connected)
         self.bridge.cable_disconnected.connect(self._on_cable_disconnected)
         self.bridge.status_updated.connect(self._on_status_updated)
+        self.bridge.mount_result.connect(self._on_mount_result)
 
         self.service.on_cable_connected = lambda adapter, ip: self.bridge.cable_connected.emit(adapter, ip)
         self.service.on_cable_disconnected = lambda: self.bridge.cable_disconnected.emit()
@@ -201,6 +206,12 @@ class USBLinkTab(QWidget):
         self.web_btn.setObjectName("secondaryButton")
         self.web_btn.clicked.connect(self._open_browser_portal)
         btn_row.addWidget(self.web_btn)
+
+        self.fix_perms_btn = QPushButton("🔓 Fix Windows Permissions", self)
+        self.fix_perms_btn.setObjectName("secondaryButton")
+        self.fix_perms_btn.setToolTip("Configure Windows WebClient registry permissions (BasicAuthLevel=2) so Windows File Explorer can mount remote laptops without access denied errors.")
+        self.fix_perms_btn.clicked.connect(self._on_fix_permissions_clicked)
+        btn_row.addWidget(self.fix_perms_btn)
 
         btn_row.addStretch()
         conn_layout.addLayout(btn_row)
@@ -374,23 +385,23 @@ class USBLinkTab(QWidget):
         self.speed_badge.setText(f"Speed: {adapter.link_speed}")
         self.cable_type_label.setText(f"Connection Mode: {adapter.cable_type} ({adapter.name})")
 
-        # Automatically mount virtual drive
+        # Automatically mount virtual drive asynchronously (never blocking Qt GUI)
         target_ip = self.last_connected_ip or "127.0.0.1"
         is_eth = "ethernet" in adapter.name.lower() or "ethernet" in adapter.cable_type.lower()
         pref_letter = DEFAULT_ETHERNET_DRIVE_LETTER if is_eth else DEFAULT_DRIVE_LETTER
         pref_label = DEFAULT_ETHERNET_DRIVE_LABEL if is_eth else DEFAULT_DRIVE_LABEL
 
-        ok, drive, msg = mount_usb_laptop_drive(
-            remote_ip=target_ip,
-            port=DEFAULT_WEB_EXPLORER_PORT,
-            preferred_letter=pref_letter,
-            drive_label=pref_label,
-            open_explorer=False
-        )
-        if ok:
-            self.current_mounted_drive = drive
-            self.drive_status_label.setText(f"Mounted Location: {drive}\\ ({pref_label})")
-            self.drive_status_label.setStyleSheet("font-weight: 700; color: #4ade80;")
+        def bg_auto_mount():
+            ok, drive, msg = mount_usb_laptop_drive(
+                remote_ip=target_ip,
+                port=DEFAULT_WEB_EXPLORER_PORT,
+                preferred_letter=pref_letter,
+                drive_label=pref_label,
+                open_explorer=False
+            )
+            self.bridge.mount_result.emit(ok, drive, msg, False)
+
+        threading.Thread(target=bg_auto_mount, daemon=True).start()
 
     def _on_cable_disconnected(self):
         eth = get_ethernet_status()
@@ -439,25 +450,93 @@ class USBLinkTab(QWidget):
         pref_letter = DEFAULT_ETHERNET_DRIVE_LETTER
         pref_label = DEFAULT_ETHERNET_DRIVE_LABEL
 
-        ok, drive, msg = mount_ethernet_laptop_drive(
-            remote_ip=target_ip,
-            port=DEFAULT_WEB_EXPLORER_PORT,
-            preferred_letter=pref_letter,
-            drive_label=pref_label,
-            open_explorer=open_explorer
-        )
+        # Set UI to async loading state (never freeze Qt)
+        self.open_explorer_btn.setEnabled(False)
+        self.mount_btn.setEnabled(False)
+        self.open_explorer_btn.setText("⏳ Mounting Drive E:... (No Lag)")
+
+        def bg_worker():
+            ok, drive, msg = mount_ethernet_laptop_drive(
+                remote_ip=target_ip,
+                port=DEFAULT_WEB_EXPLORER_PORT,
+                preferred_letter=pref_letter,
+                drive_label=pref_label,
+                open_explorer=open_explorer
+            )
+            self.bridge.mount_result.emit(ok, drive, msg, open_explorer)
+
+        threading.Thread(target=bg_worker, daemon=True).start()
+
+    @Slot(bool, str, str, bool)
+    def _on_mount_result(self, ok: bool, drive: str, msg: str, open_explorer: bool):
+        # Restore button states
+        self.open_explorer_btn.setEnabled(True)
+        self.mount_btn.setEnabled(True)
+        self.open_explorer_btn.setText("📂 Open in Windows File Explorer (Drive E:)")
+
         if ok:
             self.current_mounted_drive = drive
-            self.drive_status_label.setText(f"Mounted Location: {drive}\\ ({pref_label})")
+            self.drive_status_label.setText(f"Mounted Location: {drive}\\ ({DEFAULT_ETHERNET_DRIVE_LABEL})")
             self.drive_status_label.setStyleSheet("font-weight: 700; color: #4ade80;")
+            if not open_explorer:
+                QMessageBox.information(
+                    self,
+                    "Virtual Drive Mounted",
+                    f"Successfully mounted connected laptop as:\n\n{drive}\\ ({DEFAULT_ETHERNET_DRIVE_LABEL})\n\n"
+                    f"You can now browse, drag, drop, and copy files directly in Windows File Explorer!"
+                )
+        else:
+            auth_level = get_webclient_basic_auth_level()
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle("Windows Explorer Mount Helper")
+
+            if "WINDOWS_PERMISSION_REQUIRED" in msg or auth_level < 2:
+                box.setText(
+                    "<b>Windows File Explorer Permission Restriction Detected</b><br><br>"
+                    "Windows blocks unencrypted network drive mapping by default (<code>BasicAuthLevel = 1</code>). "
+                    "This causes Windows to report <i>'Access is denied'</i> or freeze.<br><br>"
+                    "Choose an option below:"
+                )
+                fix_btn = box.addButton("🔓 1-Click Fix Windows Permissions", QMessageBox.ActionRole)
+                app_btn = box.addButton("📁 Open Built-in Remote Explorer (Zero Setup)", QMessageBox.ActionRole)
+                box.addButton(QMessageBox.Cancel)
+
+                box.exec_()
+                clicked = box.clickedButton()
+                if clicked == fix_btn:
+                    self._on_fix_permissions_clicked()
+                elif clicked == app_btn:
+                    self._open_in_app_explorer()
+            else:
+                box.setText(
+                    f"<b>Could not mount Windows virtual drive:</b><br>{msg}<br><br>"
+                    "You can browse and transfer files at full speed using LaptopShare's built-in Remote File Explorer:"
+                )
+                app_btn = box.addButton("📁 Open Built-in Remote Explorer", QMessageBox.ActionRole)
+                web_btn = box.addButton("🌐 Open Web Explorer", QMessageBox.ActionRole)
+                box.addButton(QMessageBox.Cancel)
+
+                box.exec_()
+                clicked = box.clickedButton()
+                if clicked == app_btn:
+                    self._open_in_app_explorer()
+                elif clicked == web_btn:
+                    self._open_browser_portal()
+
+    def _on_fix_permissions_clicked(self):
+        ok, msg = enable_windows_webclient_permissions()
+        if ok:
             QMessageBox.information(
                 self,
-                "Virtual Drive Mounted",
-                f"Successfully mounted connected laptop as:\n\n{drive}\\ ({pref_label})\n\n"
-                f"You can now browse, drag, drop, and copy files directly in Windows File Explorer!"
+                "Windows Permissions Update",
+                "A Windows User Account Control (UAC) prompt has been requested.<br><br>"
+                "1. Click <b>'Yes'</b> on the Windows UAC dialog.<br>"
+                "2. Windows will set <code>BasicAuthLevel = 2</code>, unlock 4GB file transfers, and restart WebClient.<br><br>"
+                "Once confirmed, click <b>'Open in Windows File Explorer'</b> again to mount Drive E:!"
             )
         else:
-            QMessageBox.warning(self, "Mount Helper", f"Could not mount virtual drive: {msg}\n\nMake sure LaptopShare is running on the connected laptop.")
+            QMessageBox.warning(self, "Permission Update Failed", msg)
 
     def _unmount_drive(self):
         drive = self.current_mounted_drive or DEFAULT_ETHERNET_DRIVE_LETTER

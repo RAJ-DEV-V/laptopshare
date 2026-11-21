@@ -29,7 +29,7 @@ def run_test():
 
         # 1. Test OPTIONS (WebDAV capability check by Windows Explorer)
         print("\n--- 1. Testing WebDAV OPTIONS Method ---")
-        req = urllib.request.Request(f"{base_url}/", method="OPTIONS")
+        req = urllib.request.Request(f"{base_url}/", method="OPTIONS", headers={"Connection": "close"})
         with urllib.request.urlopen(req) as resp:
             assert resp.status == 200
             dav = resp.headers.get("DAV")
@@ -40,7 +40,7 @@ def run_test():
 
         # 2. Test PROPFIND on DavWWWRoot (used by Windows Explorer)
         print("\n--- 2. Testing WebDAV PROPFIND on /DavWWWRoot ---")
-        req_prop = urllib.request.Request(f"{base_url}/DavWWWRoot", method="PROPFIND", headers={"Depth": "1"})
+        req_prop = urllib.request.Request(f"{base_url}/DavWWWRoot", method="PROPFIND", headers={"Depth": "1", "Connection": "close"})
         with urllib.request.urlopen(req_prop) as resp:
             assert resp.status == 207
             xml_data = resp.read()
@@ -50,7 +50,7 @@ def run_test():
 
         # 3. Test Web Browser HTML UI
         print("\n--- 3. Testing Web Browser HTML View ---")
-        req_html = urllib.request.Request(f"{base_url}/", headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        req_html = urllib.request.Request(f"{base_url}/", headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Connection": "close"})
         with urllib.request.urlopen(req_html) as resp:
             assert resp.status == 200
             html_data = resp.read().decode("utf-8")

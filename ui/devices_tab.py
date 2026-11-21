@@ -4,16 +4,21 @@ Displays nearby laptops discovered on local Wi-Fi, provides quick connect button
 and manual IP discovery probe.
 """
 
+import threading
 from typing import List, Callable, Optional
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QListWidget, QListWidgetItem, QFrame, QLineEdit, QMessageBox
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QObject, Slot
 
 from core.discovery import DiscoveryService, PeerDevice
 from core.web_explorer_server import mount_remote_in_windows_explorer, DEFAULT_WEB_EXPLORER_PORT
+from core.virtual_drive import enable_windows_webclient_permissions, get_webclient_basic_auth_level
+
+class DeviceCardBridge(QObject):
+    mount_done = Signal(bool, str, str)
 
 class DeviceCardWidget(QFrame):
     def __init__(
@@ -26,6 +31,9 @@ class DeviceCardWidget(QFrame):
     ):
         super().__init__(parent)
         self.peer = peer
+        self.on_browse_clicked = on_browse_clicked
+        self.bridge = DeviceCardBridge()
+        self.bridge.mount_done.connect(self._on_mount_done)
         self.setObjectName("card")
         self.setFixedHeight(75)
 
@@ -58,10 +66,10 @@ class DeviceCardWidget(QFrame):
         browse_btn.clicked.connect(lambda: on_browse_clicked(self.peer))
         layout.addWidget(browse_btn)
 
-        explorer_btn = QPushButton("🗂️ Explorer", self)
-        explorer_btn.setToolTip("Mount and open in native Windows File Explorer (Drive Z:)")
-        explorer_btn.clicked.connect(self._open_in_windows_explorer)
-        layout.addWidget(explorer_btn)
+        self.explorer_btn = QPushButton("🗂️ Explorer", self)
+        self.explorer_btn.setToolTip("Mount and open in native Windows File Explorer (Drive Z:)")
+        self.explorer_btn.clicked.connect(self._open_in_windows_explorer)
+        layout.addWidget(self.explorer_btn)
 
         send_btn = QPushButton("📤 Send Files", self)
         send_btn.setObjectName("primaryButton")
@@ -69,19 +77,67 @@ class DeviceCardWidget(QFrame):
         layout.addWidget(send_btn)
 
     def _open_in_windows_explorer(self):
-        ok, drive_or_unc, msg = mount_remote_in_windows_explorer(self.peer.ip, DEFAULT_WEB_EXPLORER_PORT)
+        self.explorer_btn.setEnabled(False)
+        self.explorer_btn.setText("⏳ Mounting...")
+
+        def worker():
+            ok, drive_or_unc, msg = mount_remote_in_windows_explorer(self.peer.ip, DEFAULT_WEB_EXPLORER_PORT)
+            self.bridge.mount_done.emit(ok, drive_or_unc, msg)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    @Slot(bool, str, str)
+    def _on_mount_done(self, ok: bool, drive_or_unc: str, msg: str):
+        self.explorer_btn.setEnabled(True)
+        self.explorer_btn.setText("🗂️ Explorer")
+
         if ok:
             QMessageBox.information(
                 self,
                 "Windows Explorer Mounted",
-                f"Successfully opened {self.peer.device_name} ({self.peer.ip}) in Windows File Explorer!\n\nLocation: {drive_or_unc}\n\nYou can now copy, drag and drop files directly between laptops."
+                f"Successfully opened {self.peer.device_name} ({self.peer.ip}) in Windows File Explorer!\n\n"
+                f"Location: {drive_or_unc}\n\n"
+                f"You can now copy, drag and drop files directly between laptops."
             )
         else:
-            QMessageBox.information(
-                self,
-                "Windows Explorer Info",
-                f"{msg}\n\nTo open manually in Windows Explorer: Press Win + R and enter:\n\\\\{self.peer.ip}@{DEFAULT_WEB_EXPLORER_PORT}\\DavWWWRoot"
-            )
+            auth_level = get_webclient_basic_auth_level()
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle("Windows Explorer Mount Helper")
+
+            if "WINDOWS_PERMISSION_REQUIRED" in msg or auth_level < 2:
+                box.setText(
+                    f"<b>Windows Explorer Permission Restriction</b><br><br>"
+                    f"Windows restricts unencrypted HTTP drive mapping by default (<code>BasicAuthLevel = 1</code>). "
+                    f"This causes Explorer to report <i>'Access is denied'</i> or freeze.<br><br>"
+                    f"Unlock permissions below or open in the built-in Remote File Explorer:"
+                )
+                fix_btn = box.addButton("🔓 1-Click Fix Permissions", QMessageBox.ActionRole)
+                app_btn = box.addButton("📂 Open in Remote Explorer", QMessageBox.ActionRole)
+                box.addButton(QMessageBox.Cancel)
+
+                box.exec_()
+                clicked = box.clickedButton()
+                if clicked == fix_btn:
+                    enable_windows_webclient_permissions()
+                    QMessageBox.information(
+                        self,
+                        "Permissions Requested",
+                        "Please click 'Yes' on the Windows UAC confirmation dialog.<br>Once approved, try clicking Explorer again!"
+                    )
+                elif clicked == app_btn:
+                    self.on_browse_clicked(self.peer)
+            else:
+                box.setText(
+                    f"<b>Could not mount Windows virtual drive:</b><br>{msg}<br><br>"
+                    f"You can browse and transfer files with zero setup using the built-in Remote File Explorer:"
+                )
+                app_btn = box.addButton("📂 Open in Remote Explorer", QMessageBox.ActionRole)
+                box.addButton(QMessageBox.Cancel)
+
+                box.exec_()
+                if box.clickedButton() == app_btn:
+                    self.on_browse_clicked(self.peer)
 
 class DevicesTab(QWidget):
     peer_selected_for_send = Signal(object)
