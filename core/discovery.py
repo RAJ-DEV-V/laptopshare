@@ -93,7 +93,10 @@ class DiscoveryService:
                     if not ip.startswith("127."):
                         parts = ip.split(".")
                         if len(parts) == 4:
-                            subnet_bcast = f"{parts[0]}.{parts[1]}.{parts[2]}.255"
+                            if ip.startswith("169.254."):
+                                subnet_bcast = "169.254.255.255"
+                            else:
+                                subnet_bcast = f"{parts[0]}.{parts[1]}.{parts[2]}.255"
                             try:
                                 sock.sendto(payload, (subnet_bcast, self.port))
                             except Exception:

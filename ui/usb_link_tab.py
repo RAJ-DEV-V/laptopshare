@@ -1,12 +1,13 @@
-"""
-LaptopShare USB-C & Direct Cable Link Tab
-Provides real-time USB hardware audit, direct cable link detection,
-1-click virtual drive mounting (Drive U:) in Windows File Explorer,
-and shared folder security controls.
+r"""
+LaptopShare Ethernet & Direct Cable Sharing Tab
+Provides direct laptop-to-laptop Ethernet (Cat5e/Cat6) and USB-C sharing,
+1-click virtual drive mounting (Drive E:\ or U:\) in Windows File Explorer,
+in-app Remote File Explorer launch, and shared folder access control.
 """
 
 import os
-import subprocess
+import time
+import socket
 import webbrowser
 from pathlib import Path
 from typing import Optional, List
@@ -22,13 +23,17 @@ from core.config import ConfigManager, DEFAULT_TRANSFER_PORT
 from core.usb_detector import USBDetectionService, HardwareAuditReport, DirectLinkAdapter
 from core.virtual_drive import (
     mount_usb_laptop_drive,
+    mount_ethernet_laptop_drive,
     unmount_usb_laptop_drive,
     open_virtual_drive,
     is_drive_mounted,
     DEFAULT_DRIVE_LETTER,
-    DEFAULT_DRIVE_LABEL
+    DEFAULT_DRIVE_LABEL,
+    DEFAULT_ETHERNET_DRIVE_LETTER,
+    DEFAULT_ETHERNET_DRIVE_LABEL
 )
 from core.web_explorer_server import DEFAULT_WEB_EXPLORER_PORT
+from core.network_utils import get_ethernet_status, open_network_connections
 
 class USBLinkBridge(QObject):
     cable_connected = Signal(object, str)
@@ -36,11 +41,13 @@ class USBLinkBridge(QObject):
     status_updated = Signal(object)
 
 class USBLinkTab(QWidget):
+    open_file_explorer_requested = Signal(str)  # emitted when user wants to browse peer in app explorer
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.cfg = ConfigManager().get()
 
-        self.service = USBDetectionService(check_interval_sec=2.5)
+        self.service = USBDetectionService(check_interval_sec=2.0)
         self.bridge = USBLinkBridge()
 
         self.bridge.cable_connected.connect(self._on_cable_connected)
@@ -61,7 +68,6 @@ class USBLinkTab(QWidget):
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Scroll Area for clean presentation
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -73,9 +79,9 @@ class USBLinkTab(QWidget):
         # 1. Header
         header_row = QHBoxLayout()
         title_box = QVBoxLayout()
-        title = QLabel("USB-C to USB-C Direct Laptop Sharing", self)
+        title = QLabel("🌐 Direct Ethernet & Cable Sharing", self)
         title.setObjectName("titleLabel")
-        subtitle = QLabel("Plug-and-play direct file sharing between two Windows laptops via USB-C or Direct Link", self)
+        subtitle = QLabel("Ultra-fast plug-and-play laptop-to-laptop file sharing via direct Ethernet cable or USB-C link", self)
         subtitle.setObjectName("subtitleLabel")
         title_box.addWidget(title)
         title_box.addWidget(subtitle)
@@ -84,51 +90,68 @@ class USBLinkTab(QWidget):
 
         self.status_badge = QLabel("○ Awaiting Direct Cable Connection", self)
         self.status_badge.setObjectName("badge")
-        self.status_badge.setStyleSheet("background-color: #334155; color: #cbd5e1; padding: 6px 14px; font-size: 12px; font-weight: 600;")
+        self.status_badge.setStyleSheet("background-color: #334155; color: #cbd5e1; padding: 6px 14px; font-size: 12px; font-weight: 600; border-radius: 6px;")
         header_row.addWidget(self.status_badge)
         main_layout.addLayout(header_row)
 
-        # 2. Live Connection & Windows File Explorer Card
+        # 2. Hero Direct Cable Connection & Windows Explorer Card
         self.conn_card = QFrame(self)
         self.conn_card.setObjectName("card")
-        self.conn_card.setStyleSheet("QFrame#card { border: 2px solid #0284c7; background-color: #0f172a; }")
+        self.conn_card.setStyleSheet("QFrame#card { border: 2px solid #0284c7; background-color: #0f172a; border-radius: 10px; }")
         conn_layout = QVBoxLayout(self.conn_card)
         conn_layout.setContentsMargins(18, 16, 18, 16)
         conn_layout.setSpacing(12)
 
         c_header = QHBoxLayout()
-        c_title = QLabel("💻 Connected Laptop (Windows File Explorer)", self)
-        c_title.setStyleSheet("font-size: 16px; font-weight: 700; color: #38bdf8;")
-        self.speed_badge = QLabel("Speed: --", self)
+        self.conn_card_title = QLabel("💻 Connected Laptop (Windows File Explorer)", self)
+        self.conn_card_title.setStyleSheet("font-size: 16px; font-weight: 700; color: #38bdf8;")
+        self.speed_badge = QLabel("Standby", self)
         self.speed_badge.setStyleSheet("background-color: #0369a1; color: #e0f2fe; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 600;")
-        c_header.addWidget(c_title)
+        c_header.addWidget(self.conn_card_title)
         c_header.addStretch()
         c_header.addWidget(self.speed_badge)
         conn_layout.addLayout(c_header)
 
-        self.conn_desc = QLabel("Connect both laptops using a compatible USB-C, USB4, or direct transfer cable to mount the remote laptop as a virtual drive.", self)
+        self.conn_desc = QLabel("Plug an Ethernet cable (Cat5e/Cat6) directly between both laptops to share files and mount remote folders in File Explorer.", self)
         self.conn_desc.setObjectName("subtitleLabel")
         conn_layout.addWidget(self.conn_desc)
 
-        # Connection details row
+        # Direct Link Connection Details
         info_grid = QHBoxLayout()
         info_grid.setSpacing(16)
+
+        self.cable_type_label = QLabel("Connection Mode: Standby", self)
+        self.cable_type_label.setStyleSheet("color: #cbd5e1; font-weight: 500;")
+        info_grid.addWidget(self.cable_type_label)
 
         self.drive_status_label = QLabel("Mounted Location: Not Mounted", self)
         self.drive_status_label.setStyleSheet("font-weight: 600; color: #94a3b8;")
         info_grid.addWidget(self.drive_status_label)
-
-        self.cable_type_label = QLabel("Connection Mode: Standby", self)
-        self.cable_type_label.setStyleSheet("color: #94a3b8;")
-        info_grid.addWidget(self.cable_type_label)
         info_grid.addStretch()
         conn_layout.addLayout(info_grid)
 
-        # Action Buttons
+        # Remote Laptop IP row (Auto-detected + Manual Override)
+        ip_row = QHBoxLayout()
+        ip_lbl = QLabel("Remote Laptop IP:", self)
+        ip_lbl.setStyleSheet("color: #94a3b8; font-weight: 600;")
+        ip_row.addWidget(ip_lbl)
+
+        self.remote_ip_input = QLineEdit(self)
+        self.remote_ip_input.setPlaceholderText("Auto-detecting... or enter peer IP (e.g. 169.254.x.x)")
+        self.remote_ip_input.setFixedWidth(260)
+        ip_row.addWidget(self.remote_ip_input)
+
+        connect_peer_btn = QPushButton("Connect to IP", self)
+        connect_peer_btn.clicked.connect(self._on_manual_ip_connect)
+        ip_row.addWidget(connect_peer_btn)
+        ip_row.addStretch()
+        conn_layout.addLayout(ip_row)
+
+        # Primary Action Buttons
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
 
-        self.open_explorer_btn = QPushButton("📂 Open in Windows File Explorer (Drive U:)", self)
+        self.open_explorer_btn = QPushButton("📂 Open in Windows File Explorer (Drive E:)", self)
         self.open_explorer_btn.setStyleSheet("""
             QPushButton {
                 background-color: #0284c7;
@@ -146,7 +169,25 @@ class USBLinkTab(QWidget):
         self.open_explorer_btn.clicked.connect(self._open_explorer_drive)
         btn_row.addWidget(self.open_explorer_btn)
 
-        self.mount_btn = QPushButton("🔌 Mount Virtual Drive (U:)", self)
+        self.open_in_app_explorer_btn = QPushButton("📁 Open in Remote File Explorer", self)
+        self.open_in_app_explorer_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #059669;
+                color: #ffffff;
+                font-size: 13px;
+                font-weight: 700;
+                padding: 10px 16px;
+                border-radius: 6px;
+                border: none;
+            }
+            QPushButton:hover {
+                background-color: #047857;
+            }
+        """)
+        self.open_in_app_explorer_btn.clicked.connect(self._open_in_app_explorer)
+        btn_row.addWidget(self.open_in_app_explorer_btn)
+
+        self.mount_btn = QPushButton("🔌 Mount Drive (E:)", self)
         self.mount_btn.setObjectName("secondaryButton")
         self.mount_btn.clicked.connect(self._manual_mount_drive)
         btn_row.addWidget(self.mount_btn)
@@ -165,16 +206,55 @@ class USBLinkTab(QWidget):
         conn_layout.addLayout(btn_row)
         main_layout.addWidget(self.conn_card)
 
-        # 3. Hardware Capabilities & Diagnostic Matrix Card
+        # 3. Direct Ethernet Information & Setup Guide
+        eth_card = QFrame(self)
+        eth_card.setObjectName("card")
+        eth_card.setStyleSheet("QFrame#card { background-color: #131d2e; border: 1px solid #1e293b; border-radius: 8px; }")
+        eth_layout = QVBoxLayout(eth_card)
+        eth_layout.setContentsMargins(16, 14, 16, 14)
+        eth_layout.setSpacing(10)
+
+        eth_header = QHBoxLayout()
+        eth_title = QLabel("⚡ Direct Ethernet Speed & Plug-and-Play Guide", eth_card)
+        eth_title.setStyleSheet("font-size: 14px; font-weight: 700; color: #38bdf8;")
+        eth_header.addWidget(eth_title)
+        eth_header.addStretch()
+
+        ncpa_btn = QPushButton("🛠️ Windows Network Connections", eth_card)
+        ncpa_btn.clicked.connect(open_network_connections)
+        eth_header.addWidget(ncpa_btn)
+        eth_layout.addLayout(eth_header)
+
+        self.eth_live_info_label = QLabel(eth_card)
+        self.eth_live_info_label.setTextFormat(Qt.RichText)
+        self.eth_live_info_label.setWordWrap(True)
+        eth_layout.addWidget(self.eth_live_info_label)
+
+        guide_html = """
+        <div style="color: #94a3b8; font-size: 12px; line-height: 1.6;">
+        • <b>How Direct Ethernet Sharing Works:</b> Connect a standard Cat5e or Cat6 Ethernet cable directly between both laptops (no router or switch needed).<br>
+        • <b>Auto-MDIX Crossover:</b> Modern Ethernet network cards (Gigabit & 2.5 GbE) automatically cross over internally. Any regular Ethernet cable works.<br>
+        • <b>Automatic IP Configuration:</b> Windows automatically assigns link-local IP addresses (<code>169.254.x.x</code>) within seconds.<br>
+        • <b>Wire Speed:</b> Transfers move at full wire speed (<b>~115 MB/s Gigabit</b> sustained). 100 GB transfers in ~14 minutes; 1 TB in ~2.2 hours.
+        </div>
+        """
+        guide_label = QLabel(guide_html, eth_card)
+        guide_label.setTextFormat(Qt.RichText)
+        guide_label.setWordWrap(True)
+        eth_layout.addWidget(guide_label)
+
+        main_layout.addWidget(eth_card)
+
+        # 4. Hardware Capability Audit Matrix
         hw_card = QFrame(self)
         hw_card.setObjectName("card")
         hw_layout = QVBoxLayout(hw_card)
         hw_layout.setContentsMargins(18, 16, 18, 16)
-        hw_layout.setSpacing(12)
+        hw_layout.setSpacing(10)
 
         hw_header = QHBoxLayout()
-        hw_title = QLabel("🔬 USB Hardware Capability Audit (This Laptop)", self)
-        hw_title.setStyleSheet("font-size: 15px; font-weight: 700; color: #f1f5f9;")
+        hw_title = QLabel("🔬 Network & USB Hardware Audit (This Laptop)", self)
+        hw_title.setStyleSheet("font-size: 14px; font-weight: 700; color: #f1f5f9;")
         refresh_audit_btn = QPushButton("🔄 Refresh Audit", self)
         refresh_audit_btn.clicked.connect(self._refresh_hardware_audit)
         hw_header.addWidget(hw_title)
@@ -186,7 +266,7 @@ class USBLinkTab(QWidget):
         self.model_label.setStyleSheet("color: #38bdf8; font-weight: 600;")
         hw_layout.addWidget(self.model_label)
 
-        self.diag_summary = QLabel("Auditing USB controllers...", self)
+        self.diag_summary = QLabel("Auditing network & USB controllers...", self)
         self.diag_summary.setStyleSheet("background-color: #172033; padding: 10px 14px; border-radius: 6px; font-size: 12px; line-height: 1.5; color: #cbd5e1;")
         self.diag_summary.setWordWrap(True)
         hw_layout.addWidget(self.diag_summary)
@@ -201,7 +281,7 @@ class USBLinkTab(QWidget):
 
         main_layout.addWidget(hw_card)
 
-        # 4. Shared Folders Security Settings (Security Requirement #6)
+        # 5. Shared Folders Security Settings
         sec_card = QFrame(self)
         sec_card.setObjectName("card")
         sec_layout = QVBoxLayout(sec_card)
@@ -209,7 +289,7 @@ class USBLinkTab(QWidget):
         sec_layout.setSpacing(10)
 
         sec_title = QLabel("🔒 Shared Folders & Access Control", self)
-        sec_title.setStyleSheet("font-size: 15px; font-weight: 700; color: #4ade80;")
+        sec_title.setStyleSheet("font-size: 14px; font-weight: 700; color: #4ade80;")
         sec_layout.addWidget(sec_title)
 
         sec_desc = QLabel("Control which folders on this laptop are visible over the direct cable. Entire filesystem is never exposed by default.", self)
@@ -241,117 +321,146 @@ class USBLinkTab(QWidget):
 
         main_layout.addWidget(sec_card)
 
-        # 5. Cable Guide & Technical Architecture
-        guide_card = QFrame(self)
-        guide_card.setObjectName("card")
-        guide_layout = QVBoxLayout(guide_card)
-        guide_layout.setContentsMargins(18, 16, 18, 16)
-        guide_layout.setSpacing(10)
-
-        guide_title = QLabel("📖 Direct USB-C Hardware & Cable Guide", self)
-        guide_title.setStyleSheet("font-size: 14px; font-weight: 700; color: #cbd5e1;")
-        guide_layout.addWidget(guide_title)
-
-        guide_text = QLabel(
-            "• <strong>Thunderbolt 4 / USB4 Cable:</strong> When connecting two Thunderbolt/USB4 laptops with a certified 40 Gbps cable, Windows automatically generates a direct 20-40 Gbps host-to-host virtual adapter.<br>"
-            "• <strong>USB-C Host-to-Host Bridge Cable:</strong> Standard USB 3.x ports are host-only. A data transfer bridge cable (e.g. Belkin Easy Transfer, Plugable USB-C Transfer, Prolific PL27A1) contains bridging hardware to link two hosts directly.<br>"
-            "• <strong>Ordinary USB-C Charging Cable:</strong> Standard phone/charging cables lack host-to-host bridging chips. If using standard cables, LaptopShare automatically activates ultra-high-speed Direct P2P Link so files transfer at full speed without external internet.<br>"
-            "• <strong>Windows File Explorer Integration:</strong> Once connected, files appear under <em>This PC > USB-C Connected Laptop (U:)</em> for drag-and-drop and copy/paste.",
-            self
-        )
-        guide_text.setStyleSheet("font-size: 12px; line-height: 1.6; color: #94a3b8;")
-        guide_text.setTextFormat(Qt.RichText)
-        guide_layout.addWidget(guide_text)
-
-        main_layout.addWidget(guide_card)
-
         scroll.setWidget(scroll_content)
         root_layout.addWidget(scroll)
 
-        # Initial hardware audit
+        # Initial hardware & Ethernet audit
         self._refresh_hardware_audit()
 
     def _refresh_hardware_audit(self):
         report = self.service.audit_hardware()
+        eth = get_ethernet_status()
+
         self.model_label.setText(f"Laptop Model: {report.laptop_model}")
         self.diag_summary.setText(report.diagnostic_summary)
         self.modes_label.setText("\n".join(report.supported_cable_modes))
 
+        # Update Ethernet Live Info Card
+        if eth["is_connected"]:
+            eth_html = f"""
+            <b>Active Adapter:</b> {eth['adapter_name']} &nbsp;|&nbsp;
+            <b>Link Speed:</b> <span style="color: #4ade80; font-weight: bold;">{eth['speed_text']}</span> &nbsp;|&nbsp;
+            <b>Assigned IP:</b> <code>{eth.get('ipv4', 'Acquiring...')}</code>
+            """
+            self.eth_live_info_label.setText(eth_html)
+        else:
+            self.eth_live_info_label.setText(
+                "<i>Ethernet cable is currently unplugged. Plug a standard Cat5e/Cat6 cable into the RJ-45 port to activate.</i>"
+            )
+
         if report.active_direct_cable:
             self._on_cable_connected(report.active_direct_cable, self.service.connected_peer_ip or "")
+        elif eth["is_connected"]:
+            # Ethernet is up, show active badge
+            self.status_badge.setText(f"● Direct Ethernet Active ({eth['speed_text']})")
+            self.status_badge.setStyleSheet("background-color: #059669; color: #ecfdf5; padding: 6px 14px; font-size: 12px; font-weight: 700; border-radius: 6px;")
+            self.speed_badge.setText(f"Speed: {eth['speed_text']}")
+            self.cable_type_label.setText(f"Connection Mode: Direct Ethernet Cable ({eth['adapter_name']})")
+            if eth.get("ipv4"):
+                self.conn_desc.setText(f"Ethernet connection active at local address {eth['ipv4']}. Ready to share and browse remote files.")
         else:
             self.status_badge.setText("○ Awaiting Direct Cable Connection")
-            self.status_badge.setStyleSheet("background-color: #334155; color: #cbd5e1; padding: 6px 14px; font-size: 12px; font-weight: 600;")
-            self.speed_badge.setText("Speed: Standby")
+            self.status_badge.setStyleSheet("background-color: #334155; color: #cbd5e1; padding: 6px 14px; font-size: 12px; font-weight: 600; border-radius: 6px;")
+            self.speed_badge.setText("Standby")
             self.cable_type_label.setText("Connection Mode: Standby")
 
     def _on_cable_connected(self, adapter: DirectLinkAdapter, peer_ip: str):
-        self.last_connected_ip = peer_ip if peer_ip else "127.0.0.1"
+        self.last_connected_ip = peer_ip if peer_ip else self.remote_ip_input.text().strip()
+        if self.last_connected_ip:
+            self.remote_ip_input.setText(self.last_connected_ip)
+
         self.status_badge.setText(f"● Direct Cable Connected ({adapter.cable_type})")
-        self.status_badge.setStyleSheet("background-color: #15803d; color: #dcfce7; padding: 6px 14px; font-size: 12px; font-weight: 700;")
+        self.status_badge.setStyleSheet("background-color: #059669; color: #ecfdf5; padding: 6px 14px; font-size: 12px; font-weight: 700; border-radius: 6px;")
         self.speed_badge.setText(f"Speed: {adapter.link_speed}")
         self.cable_type_label.setText(f"Connection Mode: {adapter.cable_type} ({adapter.name})")
 
         # Automatically mount virtual drive
+        target_ip = self.last_connected_ip or "127.0.0.1"
+        is_eth = "ethernet" in adapter.name.lower() or "ethernet" in adapter.cable_type.lower()
+        pref_letter = DEFAULT_ETHERNET_DRIVE_LETTER if is_eth else DEFAULT_DRIVE_LETTER
+        pref_label = DEFAULT_ETHERNET_DRIVE_LABEL if is_eth else DEFAULT_DRIVE_LABEL
+
         ok, drive, msg = mount_usb_laptop_drive(
-            remote_ip=self.last_connected_ip,
+            remote_ip=target_ip,
             port=DEFAULT_WEB_EXPLORER_PORT,
-            preferred_letter=DEFAULT_DRIVE_LETTER,
-            drive_label=DEFAULT_DRIVE_LABEL,
+            preferred_letter=pref_letter,
+            drive_label=pref_label,
             open_explorer=False
         )
         if ok:
             self.current_mounted_drive = drive
-            self.drive_status_label.setText(f"Mounted Location: {drive}\\ ({DEFAULT_DRIVE_LABEL})")
+            self.drive_status_label.setText(f"Mounted Location: {drive}\\ ({pref_label})")
             self.drive_status_label.setStyleSheet("font-weight: 700; color: #4ade80;")
 
     def _on_cable_disconnected(self):
-        self.status_badge.setText("○ Direct Cable Disconnected")
-        self.status_badge.setStyleSheet("background-color: #334155; color: #cbd5e1; padding: 6px 14px; font-size: 12px; font-weight: 600;")
-        self.speed_badge.setText("Speed: Disconnected")
-        self.cable_type_label.setText("Connection Mode: Standby")
-        if self.current_mounted_drive:
-            unmount_usb_laptop_drive(self.current_mounted_drive)
-            self.current_mounted_drive = None
-            self.drive_status_label.setText("Mounted Location: Not Mounted")
-            self.drive_status_label.setStyleSheet("font-weight: 600; color: #94a3b8;")
+        eth = get_ethernet_status()
+        if not eth["is_connected"]:
+            self.status_badge.setText("○ Direct Cable Disconnected")
+            self.status_badge.setStyleSheet("background-color: #334155; color: #cbd5e1; padding: 6px 14px; font-size: 12px; font-weight: 600; border-radius: 6px;")
+            self.speed_badge.setText("Disconnected")
+            self.cable_type_label.setText("Connection Mode: Standby")
+            if self.current_mounted_drive:
+                unmount_usb_laptop_drive(self.current_mounted_drive)
+                self.current_mounted_drive = None
+                self.drive_status_label.setText("Mounted Location: Not Mounted")
+                self.drive_status_label.setStyleSheet("font-weight: 600; color: #94a3b8;")
 
     def _on_status_updated(self, report: HardwareAuditReport):
-        if not report.active_direct_cable and not self.current_mounted_drive:
+        eth = get_ethernet_status()
+        if eth["is_connected"] and not report.active_direct_cable:
+            self.status_badge.setText(f"● Direct Ethernet Active ({eth['speed_text']})")
+            self.status_badge.setStyleSheet("background-color: #059669; color: #ecfdf5; padding: 6px 14px; font-size: 12px; font-weight: 700; border-radius: 6px;")
+            self.speed_badge.setText(f"Speed: {eth['speed_text']}")
+            self.cable_type_label.setText(f"Connection Mode: Direct Ethernet Cable ({eth['adapter_name']})")
+        elif not report.active_direct_cable and not self.current_mounted_drive and not eth["is_connected"]:
             self.status_badge.setText("○ Awaiting Direct Cable Connection")
 
+    def _on_manual_ip_connect(self):
+        target = self.remote_ip_input.text().strip()
+        if not target:
+            QMessageBox.warning(self, "IP Missing", "Please enter the IP address of the connected laptop.")
+            return
+        self.last_connected_ip = target
+        self._manual_mount_drive(open_explorer=True)
+
     def _open_explorer_drive(self):
-        drive = self.current_mounted_drive or DEFAULT_DRIVE_LETTER
+        drive = self.current_mounted_drive or DEFAULT_ETHERNET_DRIVE_LETTER
         if is_drive_mounted(drive):
             open_virtual_drive(drive)
         else:
-            # Mount and open
             self._manual_mount_drive(open_explorer=True)
 
+    def _open_in_app_explorer(self):
+        target_ip = self.remote_ip_input.text().strip() or self.last_connected_ip or "127.0.0.1"
+        self.open_file_explorer_requested.emit(target_ip)
+
     def _manual_mount_drive(self, open_explorer: bool = True):
-        target_ip = self.last_connected_ip or "127.0.0.1"
-        ok, drive, msg = mount_usb_laptop_drive(
+        target_ip = self.remote_ip_input.text().strip() or self.last_connected_ip or "127.0.0.1"
+        pref_letter = DEFAULT_ETHERNET_DRIVE_LETTER
+        pref_label = DEFAULT_ETHERNET_DRIVE_LABEL
+
+        ok, drive, msg = mount_ethernet_laptop_drive(
             remote_ip=target_ip,
             port=DEFAULT_WEB_EXPLORER_PORT,
-            preferred_letter=DEFAULT_DRIVE_LETTER,
-            drive_label=DEFAULT_DRIVE_LABEL,
+            preferred_letter=pref_letter,
+            drive_label=pref_label,
             open_explorer=open_explorer
         )
         if ok:
             self.current_mounted_drive = drive
-            self.drive_status_label.setText(f"Mounted Location: {drive}\\ ({DEFAULT_DRIVE_LABEL})")
+            self.drive_status_label.setText(f"Mounted Location: {drive}\\ ({pref_label})")
             self.drive_status_label.setStyleSheet("font-weight: 700; color: #4ade80;")
             QMessageBox.information(
                 self,
                 "Virtual Drive Mounted",
-                f"Successfully mounted connected laptop as:\n\n{drive}\\ ({DEFAULT_DRIVE_LABEL})\n\n"
+                f"Successfully mounted connected laptop as:\n\n{drive}\\ ({pref_label})\n\n"
                 f"You can now browse, drag, drop, and copy files directly in Windows File Explorer!"
             )
         else:
-            QMessageBox.warning(self, "Mount Helper", f"Could not mount virtual drive: {msg}")
+            QMessageBox.warning(self, "Mount Helper", f"Could not mount virtual drive: {msg}\n\nMake sure LaptopShare is running on the connected laptop.")
 
     def _unmount_drive(self):
-        drive = self.current_mounted_drive or DEFAULT_DRIVE_LETTER
+        drive = self.current_mounted_drive or DEFAULT_ETHERNET_DRIVE_LETTER
         if is_drive_mounted(drive):
             unmount_usb_laptop_drive(drive)
             self.current_mounted_drive = None
@@ -362,7 +471,7 @@ class USBLinkTab(QWidget):
             QMessageBox.information(self, "Drive Unmounted", f"Drive {drive}\\ is not currently mounted.")
 
     def _open_browser_portal(self):
-        target_ip = self.last_connected_ip or "127.0.0.1"
+        target_ip = self.remote_ip_input.text().strip() or self.last_connected_ip or "127.0.0.1"
         url = f"http://{target_ip}:{DEFAULT_WEB_EXPLORER_PORT}/"
         webbrowser.open(url)
 

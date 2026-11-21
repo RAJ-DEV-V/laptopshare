@@ -108,8 +108,8 @@ class MainWindow(QMainWindow):
 
         self.btn_send = self._create_nav_button("📤  Send Files", 0)
         self.btn_receive = self._create_nav_button("📥  Receive Files", 1)
-        self.btn_usb = self._create_nav_button("🔌  USB-C Direct Link", 2)
-        self.btn_browse = self._create_nav_button("📂  Browse & Copy", 3)
+        self.btn_usb = self._create_nav_button("🌐  Ethernet & Cable Sharing", 2)
+        self.btn_browse = self._create_nav_button("📁  Remote File Explorer", 3)
         self.btn_migrate = self._create_nav_button("🔄  PC Migration", 4)
         self.btn_devices = self._create_nav_button("📡  Nearby Devices", 5)
         self.btn_history = self._create_nav_button("📜  Transfer History", 6)
@@ -146,6 +146,7 @@ class MainWindow(QMainWindow):
         self.settings_tab = SettingsTab(self)
 
         # Wire cross-tab interactions
+        self.usb_tab.open_file_explorer_requested.connect(self._switch_to_browse_with_ip)
         self.devices_tab.peer_selected_for_send.connect(self._switch_to_send_with_peer)
         self.devices_tab.peer_selected_for_browse.connect(self._switch_to_browse_with_peer)
         self.devices_tab.peer_selected_for_migrate.connect(self._switch_to_migrate_with_peer)
@@ -213,6 +214,11 @@ class MainWindow(QMainWindow):
                 break
         self.btn_browse.setChecked(True)
         self.stack.setCurrentIndex(3)
+
+    def _switch_to_browse_with_ip(self, ip: str):
+        self.btn_browse.setChecked(True)
+        self.stack.setCurrentIndex(3)
+        self.browse_tab.connect_to_ip(ip)
 
     def _switch_to_migrate_with_peer(self, peer: PeerDevice):
         self.migration_tab.target_mode_combo.setCurrentIndex(0)

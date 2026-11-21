@@ -49,14 +49,21 @@ def get_local_ip_addresses() -> List[Dict[str, str]]:
             for addr in addrs:
                 if addr.family == socket.AF_INET:
                     ip = addr.address
-                    if ip.startswith("127.") or ip.startswith("169.254."):
+                    if ip.startswith("127."):
                         continue
+                    is_wifi = any(w in iface_name.lower() for w in ["wi-fi", "wifi", "wlan", "wireless"])
+                    is_eth = any(e in iface_name.lower() for e in ["ethernet", "eth", "lan", "realtek", "intel", "gbe", "pcie"])
+
+                    # If APIPA link-local (169.254.x.x), keep it if it's an active direct Ethernet/LAN interface
+                    if ip.startswith("169.254.") and not is_eth:
+                        continue
+
                     if ip not in seen_ips:
                         seen_ips.add(ip)
-                        is_wifi = any(w in iface_name.lower() for w in ["wi-fi", "wifi", "wlan", "wireless"])
-                        is_eth = any(e in iface_name.lower() for e in ["ethernet", "eth", "lan"])
                         label = iface_name
-                        if is_wifi:
+                        if is_eth and ip.startswith("169.254."):
+                            label += " (Direct Ethernet Link-Local)"
+                        elif is_wifi:
                             label += " (Wi-Fi)"
                         elif is_eth:
                             label += " (Ethernet)"
@@ -223,5 +230,60 @@ def open_mobile_hotspot_settings():
     try:
         import os
         os.startfile("ms-settings:network-mobilehotspot")
+    except Exception:
+        pass
+
+def get_ethernet_status() -> Dict[str, Any]:
+    """
+    Returns real-time diagnostics of the system's Ethernet adapter(s),
+    including connection state, negotiated link speed, and IPv4 address.
+    """
+    info = {
+        "is_connected": False,
+        "adapter_name": "Ethernet",
+        "speed_mbps": 0,
+        "speed_text": "Disconnected",
+        "ipv4": "",
+        "is_gigabit": False,
+        "status_text": "Ethernet Cable Disconnected",
+        "peer_ip": None
+    }
+    try:
+        import psutil
+        stats_dict = psutil.net_if_stats()
+        addrs_dict = psutil.net_if_addrs()
+
+        for iface_name, stats in stats_dict.items():
+            iface_lower = iface_name.lower()
+            if any(k in iface_lower for k in ["ethernet", "eth", "lan", "realtek", "gbe", "pcie"]):
+                if "bluetooth" in iface_lower or "virtual" in iface_lower or "vpn" in iface_lower:
+                    continue
+                info["adapter_name"] = iface_name
+                info["is_connected"] = stats.isup
+                info["speed_mbps"] = stats.speed if stats.speed > 0 else 0
+                info["is_gigabit"] = (stats.speed >= 1000)
+
+                for addr in addrs_dict.get(iface_name, []):
+                    if addr.family == socket.AF_INET and not addr.address.startswith("127."):
+                        info["ipv4"] = addr.address
+                        break
+
+                if stats.isup:
+                    spd_txt = f"{stats.speed} Mbps" if stats.speed > 0 else "Active Link"
+                    if stats.speed >= 1000:
+                        spd_txt += " (Gigabit Ultra-Fast)"
+                    info["speed_text"] = spd_txt
+                    info["status_text"] = f"🟢 Direct Ethernet Link Active ({spd_txt})"
+                    break
+    except Exception as e:
+        info["status_text"] = f"Ethernet diagnostic unavailable: {e}"
+
+    return info
+
+def open_network_connections():
+    """Opens Windows Network Connections control panel (ncpa.cpl)."""
+    try:
+        import os
+        os.startfile("ncpa.cpl")
     except Exception:
         pass

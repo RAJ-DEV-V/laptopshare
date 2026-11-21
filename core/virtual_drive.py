@@ -17,6 +17,8 @@ CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
 DEFAULT_DRIVE_LETTER = "U:"
 DEFAULT_DRIVE_LABEL = "USB-C Connected Laptop"
+DEFAULT_ETHERNET_DRIVE_LETTER = "E:"
+DEFAULT_ETHERNET_DRIVE_LABEL = "Ethernet Connected Laptop"
 
 def get_available_drive_letters(preferred: str = "U:") -> List[str]:
     """Returns available Windows drive letters, with preferred letters first."""
@@ -131,6 +133,22 @@ def mount_usb_laptop_drive(
         return True, unc_target, f"Opened {unc_target} directly in Windows Explorer."
     except Exception as e:
         return False, "", f"Failed to mount or open in Windows Explorer: {e}"
+
+def mount_ethernet_laptop_drive(
+    remote_ip: str,
+    port: int = 52145,
+    preferred_letter: str = DEFAULT_ETHERNET_DRIVE_LETTER,
+    drive_label: str = DEFAULT_ETHERNET_DRIVE_LABEL,
+    open_explorer: bool = True
+) -> Tuple[bool, str, str]:
+    """Mounts remote laptop connected via Ethernet cable as Drive E: (or next available letter)."""
+    return mount_usb_laptop_drive(
+        remote_ip=remote_ip,
+        port=port,
+        preferred_letter=preferred_letter,
+        drive_label=drive_label,
+        open_explorer=open_explorer
+    )
 
 def unmount_usb_laptop_drive(drive_letter: str) -> bool:
     """Safely unmounts a mapped virtual drive."""

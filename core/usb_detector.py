@@ -289,6 +289,16 @@ class USBDetectionService:
             return None
 
         local_ip = adapter.ipv4_address
+        # Send a quick UDP probe to broadcast so neighbor discovery cache is triggered
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe_s:
+                probe_s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                probe_s.settimeout(0.1)
+                bcast = "169.254.255.255" if local_ip.startswith("169.254.") else "255.255.255.255"
+                probe_s.sendto(b"DISCOVERY_PROBE", (bcast, 52141))
+        except Exception:
+            pass
+
         try:
             cmd = ["arp", "-a"]
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=3, creationflags=CREATE_NO_WINDOW)
